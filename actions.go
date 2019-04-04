@@ -20,6 +20,12 @@ type Action struct {
 	Timestamp   string
 }
 
+type AuthResponse struct {
+	token string
+}
+
+var authToken = ""
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "actions"
@@ -48,8 +54,24 @@ func main() {
 			},
 			Action: func(c *cli.Context) error {
 				saved := createAction(c.String("desc"), c.String("result"))
-				printDelimiter()
-				printAction(saved)
+				if saved != (Action{}) {
+					printDelimiter()
+					printAction(saved)
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "login",
+			Aliases: []string{"a"},
+			Usage:   "Log in actions-api",
+			Flags: []cli.Flag{
+				cli.StringFlag{Name: "username, u"},
+				cli.StringFlag{Name: "password, pw"},
+			},
+			Action: func(c *cli.Context) error {
+				authToken = authenticate(c.String("username"), c.String("password"))
+				fmt.Printf("token : %s\n", authToken)
 				return nil
 			},
 		},
@@ -64,7 +86,7 @@ func main() {
 func getAllActions() []Action {
 	response, err := http.Get("http://localhost:8080/api/item")
 	if err != nil {
-		fmt.Printf("Request to notes storage failed with error %s\n", err)
+		fmt.Printf("Request to actions storage failed with error %s\n", err)
 		return nil
 	}
 	data, _ := ioutil.ReadAll(response.Body)
@@ -80,13 +102,31 @@ func createAction(desc string, result string) Action {
 	jsonValue, _ := json.Marshal(jsonData)
 	response, err := http.Post("http://localhost:8080/api/item", "application/json", bytes.NewBuffer(jsonValue))
 	if err != nil {
-		fmt.Printf("Request to notes storage failed with error %s\n", err)
-		// return nil
+		fmt.Printf("Request to actions storage failed with error %s\n", err)
+		return Action{}
 	}
 	data, _ := ioutil.ReadAll(response.Body)
 	var action Action
 	json.Unmarshal([]byte(data), &action)
 	return action
+}
+
+func authenticate(username string, password string) string {
+	jsonData := map[string]string{"username": username, "password": password}
+	fmt.Printf("Request  %s\n", jsonData)
+
+	jsonValue, _ := json.Marshal(jsonData)
+	response, err := http.Post("http://localhost:8080/auth", "application/json", bytes.NewBuffer(jsonValue))
+	if err != nil {
+		fmt.Printf("Authentication failed with error %s\n", err)
+		return ""
+	}
+	data, _ := ioutil.ReadAll(response.Body)
+	var authResponse AuthResponse
+	json.Unmarshal([]byte(data), &authResponse)
+	fmt.Printf("token : %s\n", authToken)
+
+	return authResponse.token
 }
 
 func printActions(actions []Action) {
