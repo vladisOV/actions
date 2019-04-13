@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -24,6 +25,11 @@ type ActionResponse struct {
 	Token string
 }
 
+type QueryParam struct {
+	name  string
+	value string
+}
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "actions"
@@ -31,51 +37,49 @@ func main() {
 	app.Version = "1.0.0"
 	app.EnableBashCompletion = true
 
-	app.Flags = []cli.Flag{
-		cli.StringFlag{
-			Name:  "token",
-			Value: "da",
-			Usage: "auth token",
-			// Hidden: true,
-		},
-	}
-
 	app.Commands = []cli.Command{
 		{
 			Name:    "all",
 			Aliases: []string{"a"},
-			Usage:   "get list of actions",
+			Usage:   "actions all",
 			Action:  getAllActions,
 		},
 		{
 			Name:    "new",
 			Aliases: []string{"n"},
-			Usage:   "add new action",
+			Usage:   "actions new -d DESCRIPTION -r RESULT",
 			Flags: []cli.Flag{
 				cli.StringFlag{Name: "desc, d"},
 				cli.StringFlag{Name: "result, r"},
 			},
-			Action: func(c *cli.Context) error {
-				saved := createAction(c.String("desc"), c.String("result"))
-				if saved != (Action{}) {
-					printDelimiter()
-					printAction(saved)
-				}
-				return nil
-			},
+			Action: createAction,
 		},
 		{
 			Name:    "login",
-			Aliases: []string{"n"},
-			Usage:   "log in into app",
+			Aliases: []string{"l"},
+			Usage:   "actions login -u USERNAME -pw PASSWORD",
 			Flags: []cli.Flag{
 				cli.StringFlag{Name: "user, u"},
 				cli.StringFlag{Name: "password, pw"},
 			},
-			Action: func(c *cli.Context) error {
-				token := authenticate(c.String("user"), c.String("password"))
-				saveToken(token)
-				return nil
+			Action: auth,
+		},
+		{
+			Name:  "by",
+			Usage: "get actions by param",
+			Subcommands: []cli.Command{
+				{
+					Name:    "desc",
+					Aliases: []string{"d"},
+					Usage:   "actions by desc DESCRIPTION VALUE",
+					Action:  getActionsByDesc,
+				},
+				{
+					Name:    "res",
+					Aliases: []string{"r"},
+					Usage:   "actions by res RESULT VALUE",
+					Action:  getActionsByResult,
+				},
 			},
 		},
 	}
@@ -98,14 +102,49 @@ func getToken() string {
 	return string(token)
 }
 
-func getAllActions(c *cli.Context) error {
+func getActionsByResult(c *cli.Context) error {
 	var token = getToken()
-	actions := getAllActionsRequest(token)
+	actions := getActionsRequest(token, QueryParam{"result", c.Args().Get(0)})
 	printActions(actions)
 	return nil
 }
 
-func authenticate(username string, password string) string {
+func getActionsByDesc(c *cli.Context) error {
+	var token = getToken()
+	actions := getActionsRequest(token, QueryParam{"description", c.Args().Get(0)})
+	printActions(actions)
+	return nil
+}
+
+func getAllActions(c *cli.Context) error {
+	var token = getToken()
+	actions := getActionsRequest(token, QueryParam{})
+	printActions(actions)
+	return nil
+}
+
+func createAction(c *cli.Context) error {
+	var token = getToken()
+	saved := createActionRequest(c.String("desc"), c.String("result"), token)
+	if saved != (Action{}) {
+		printDelimiter()
+		printAction(saved)
+	}
+	return nil
+}
+
+func auth(c *cli.Context) error {
+	token := authRequest(c.String("user"), c.String("password"))
+	if len(token) == 0 {
+		fmt.Printf("Incorrect username or/and password.\n")
+		return nil
+	}
+	saveToken(token)
+	fmt.Printf("Successfully logged in.\n")
+	return nil
+}
+
+func authRequest(username string, password string) string {
 	jsonData := map[string]string{"username": username, "password": password}
 	jsonValue, _ := json.Marshal(jsonData)
 	response, err := http.Post("http://localhost:8080/auth", "application/json", bytes.NewBuffer(jsonValue))
@@ -121,12 +160,13 @@ func authenticate(username string, password string) string {
 	return ar.Token
 }
 
-func getAllActionsRequest(token string) []Action {
-	req, err := http.NewRequest("GET", "http://localhost:8080/api/item", nil)
-	if err != nil {
-		log.Fatal("Error reading request. ", err)
+func getActionsRequest(token string, param QueryParam) []Action {
+	req, _ := http.NewRequest("GET", "http://localhost:8080/api/item", nil)
+	if (param != QueryParam{}) {
+		q := req.URL.Query()
+		q.Add(param.name, param.value)
+		req.URL.RawQuery = q.Encode()
 	}
-	fmt.Printf(token)
 
 	req.Header.Set("Authorization", "Bearer "+token)
 	client := &http.Client{}
@@ -143,14 +183,19 @@ func getAllActionsRequest(token string) []Action {
 	return actions
 }
 
-func createAction(desc string, result string) Action {
+func createActionRequest(desc string, result string, token string) Action {
 	jsonData := map[string]string{"description": desc, "result": result,
 		"timestamp": time.Now().Format("2006-01-02T15:04:05.999")}
 	jsonValue, _ := json.Marshal(jsonData)
-	response, err := http.Post("http://localhost:8080/api/item", "application/json", bytes.NewBuffer(jsonValue))
+
+	req, err := http.NewRequest("POST", "http://localhost:8080/api/item", bytes.NewBuffer(jsonValue))
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{}
+	response, err := client.Do(req)
+
 	if err != nil {
 		fmt.Printf("Request to actions storage failed with error %s\n", err)
-		// return nil
+		return Action{}
 	}
 	data, _ := ioutil.ReadAll(response.Body)
 	var action Action
@@ -170,6 +215,11 @@ func printActions(actions []Action) {
 	for _, action := range actions {
 		printAction(action)
 	}
+}
+
+func marshallBody(body map[string]string) io.Reader {
+	jsonValue, _ := json.Marshal(body)
+	return bytes.NewBuffer(jsonValue)
 }
 
 func printAction(action Action) {
