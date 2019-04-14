@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/bobappleyard/readline"
 	"github.com/urfave/cli"
 )
 
@@ -28,6 +29,11 @@ type ActionResponse struct {
 type QueryParam struct {
 	name  string
 	value string
+}
+
+type AuthRequest struct {
+	username string
+	password string
 }
 
 func main() {
@@ -57,12 +63,8 @@ func main() {
 		{
 			Name:    "login",
 			Aliases: []string{"l"},
-			Usage:   "actions login -u USERNAME -pw PASSWORD",
-			Flags: []cli.Flag{
-				cli.StringFlag{Name: "user, u"},
-				cli.StringFlag{Name: "password, pw"},
-			},
-			Action: auth,
+			Usage:   "actions login and follow instructions",
+			Action:  auth,
 		},
 		{
 			Name:  "by",
@@ -134,7 +136,20 @@ func createAction(c *cli.Context) error {
 }
 
 func auth(c *cli.Context) error {
-	token := authRequest(c.String("user"), c.String("password"))
+	var authRequest = AuthRequest{}
+	fmt.Println("Enter your username:")
+	userline, err := readline.String("> ")
+	if err != nil {
+		return nil
+	}
+	authRequest.username = userline
+	fmt.Println("Enter your password:")
+	passline, err := readline.String("> ")
+	if err != nil {
+		return nil
+	}
+	authRequest.password = passline
+	token := loginRequest(authRequest)
 	if len(token) == 0 {
 		fmt.Printf("Incorrect username or/and password.\n")
 		return nil
@@ -144,10 +159,9 @@ func auth(c *cli.Context) error {
 	return nil
 }
 
-func authRequest(username string, password string) string {
-	jsonData := map[string]string{"username": username, "password": password}
-	jsonValue, _ := json.Marshal(jsonData)
-	response, err := http.Post("http://localhost:8080/auth", "application/json", bytes.NewBuffer(jsonValue))
+func loginRequest(authRequest AuthRequest) string {
+	jsonData := map[string]string{"username": authRequest.username, "password": authRequest.password}
+	response, err := http.Post("http://localhost:8080/auth", "application/json", marshalBody(jsonData))
 	if err != nil {
 		fmt.Printf("Failed to authenticate %s\n", err)
 		return ""
@@ -217,7 +231,7 @@ func printActions(actions []Action) {
 	}
 }
 
-func marshallBody(body map[string]string) io.Reader {
+func marshalBody(body map[string]string) io.Reader {
 	jsonValue, _ := json.Marshal(body)
 	return bytes.NewBuffer(jsonValue)
 }
