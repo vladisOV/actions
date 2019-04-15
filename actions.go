@@ -16,10 +16,10 @@ import (
 )
 
 type Action struct {
-	Id          string
-	Description string
-	Result      string
-	Timestamp   string
+	Id          *string `json:"id"`
+	Description string  `json:"description"`
+	Result      string  `json:"result"`
+	Timestamp   string  `json:"timestamp"`
 }
 
 type ActionResponse struct {
@@ -73,16 +73,27 @@ func main() {
 				{
 					Name:    "desc",
 					Aliases: []string{"d"},
-					Usage:   "actions by desc DESCRIPTION VALUE",
+					Usage:   "actions by desc/d DESCRIPTION VALUE",
 					Action:  getActionsByDesc,
 				},
 				{
 					Name:    "res",
 					Aliases: []string{"r"},
-					Usage:   "actions by res RESULT VALUE",
+					Usage:   "actions by res/r RESULT VALUE",
 					Action:  getActionsByResult,
 				},
 			},
+		},
+		{
+			Name:    "update",
+			Aliases: []string{"u"},
+			Usage:   "actions update -id ID OF ACTION -d DESCRIPTION -r RESULT",
+			Flags: []cli.Flag{
+				cli.StringFlag{Name: "id"},
+				cli.StringFlag{Name: "d"},
+				cli.StringFlag{Name: "r"},
+			},
+			Action: updateAction,
 		},
 	}
 
@@ -125,9 +136,47 @@ func getAllActions(c *cli.Context) error {
 	return nil
 }
 
+func updateAction(c *cli.Context) error {
+	var id = c.String("id")
+	if len(id) == 0 {
+		fmt.Println("Provide correct id.")
+		return nil
+	}
+	var description = c.String("d")
+	var result = c.String("r")
+	var token = getToken()
+
+	if len(description) > 0 && len(result) > 0 {
+		var action = Action{
+			Id:          &id,
+			Description: description,
+			Result:      result,
+		}
+		createActionRequest(action, token)
+	} else {
+		var actions = getActionsRequest(token, QueryParam{name: "id", value: id})
+		if len(actions) > 0 {
+			var action = actions[0]
+			if len(description) > 0 {
+				action.Description = description
+			} else {
+				action.Result = result
+			}
+		} else {
+			fmt.Println("Action has not been found by id %s", id)
+		}
+	}
+	return nil
+}
+
 func createAction(c *cli.Context) error {
 	var token = getToken()
-	saved := createActionRequest(c.String("desc"), c.String("result"), token)
+	var action = Action{
+		Description: c.String("desc"),
+		Result:      c.String("result"),
+		Timestamp:   time.Now().Format("2006-01-02T15:04:05.999"),
+	}
+	saved := createActionRequest(action, token)
 	if saved != (Action{}) {
 		printDelimiter()
 		printAction(saved)
@@ -197,13 +246,12 @@ func getActionsRequest(token string, param QueryParam) []Action {
 	return actions
 }
 
-func createActionRequest(desc string, result string, token string) Action {
-	jsonData := map[string]string{"description": desc, "result": result,
-		"timestamp": time.Now().Format("2006-01-02T15:04:05.999")}
-	jsonValue, _ := json.Marshal(jsonData)
+func createActionRequest(action Action, token string) Action {
+	jsonValue, _ := json.Marshal(action)
 
 	req, err := http.NewRequest("POST", "http://localhost:8080/api/item", bytes.NewBuffer(jsonValue))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
 	response, err := client.Do(req)
 
@@ -212,9 +260,9 @@ func createActionRequest(desc string, result string, token string) Action {
 		return Action{}
 	}
 	data, _ := ioutil.ReadAll(response.Body)
-	var action Action
-	json.Unmarshal([]byte(data), &action)
-	return action
+	var saved Action
+	json.Unmarshal([]byte(data), &saved)
+	return saved
 }
 
 func isAuthorized(token string) bool {
@@ -237,7 +285,7 @@ func marshalBody(body map[string]string) io.Reader {
 }
 
 func printAction(action Action) {
-	fmt.Printf("Id : %s\n", action.Id)
+	fmt.Printf("Id : %s\n", *action.Id)
 	fmt.Printf("Description : %s\n", action.Description)
 	fmt.Printf("Result : %s\n", action.Result)
 	fmt.Printf("Timestamp : %s\n", action.Timestamp)
