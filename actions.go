@@ -47,13 +47,13 @@ func main() {
 		{
 			Name:    "all",
 			Aliases: []string{"a"},
-			Usage:   "actions all",
+			Usage:   "Get all actions for current user",
 			Action:  getAllActions,
 		},
 		{
 			Name:    "new",
 			Aliases: []string{"n"},
-			Usage:   "actions new -d DESCRIPTION -r RESULT",
+			Usage:   "Create new action",
 			Flags: []cli.Flag{
 				cli.StringFlag{Name: "desc, d"},
 				cli.StringFlag{Name: "result, r"},
@@ -63,23 +63,23 @@ func main() {
 		{
 			Name:    "login",
 			Aliases: []string{"l"},
-			Usage:   "actions login and follow instructions",
+			Usage:   "Log in into app.",
 			Action:  auth,
 		},
 		{
 			Name:  "by",
-			Usage: "get actions by param",
+			Usage: "Get actions by param. Just put your description/result as argument",
 			Subcommands: []cli.Command{
 				{
 					Name:    "desc",
 					Aliases: []string{"d"},
-					Usage:   "actions by desc/d DESCRIPTION VALUE",
+					Usage:   "Get actions by description",
 					Action:  getActionsByDesc,
 				},
 				{
 					Name:    "res",
 					Aliases: []string{"r"},
-					Usage:   "actions by res/r RESULT VALUE",
+					Usage:   "Get actions by result",
 					Action:  getActionsByResult,
 				},
 			},
@@ -87,7 +87,7 @@ func main() {
 		{
 			Name:    "update",
 			Aliases: []string{"u"},
-			Usage:   "actions update -id ID OF ACTION -d DESCRIPTION -r RESULT",
+			Usage:   "Update action by id.",
 			Flags: []cli.Flag{
 				cli.StringFlag{Name: "id"},
 				cli.StringFlag{Name: "d"},
@@ -103,35 +103,23 @@ func main() {
 	}
 }
 
-func saveToken(token string) {
-	ioutil.WriteFile("token", []byte(token), 0644)
-}
-
-func getToken() string {
-	token, err := ioutil.ReadFile("token")
-	if err != nil || !isAuthorized(string(token)) {
-		fmt.Printf("Unauthorized, you have to log in first!\n")
-	}
-	return string(token)
-}
-
 func getActionsByResult(c *cli.Context) error {
 	var token = getToken()
-	actions := getActionsRequest(token, QueryParam{"result", c.Args().Get(0)})
+	actions := getActionsByParam(token, QueryParam{"result", c.Args().Get(0)})
 	printActions(actions)
 	return nil
 }
 
 func getActionsByDesc(c *cli.Context) error {
 	var token = getToken()
-	actions := getActionsRequest(token, QueryParam{"description", c.Args().Get(0)})
+	actions := getActionsByParam(token, QueryParam{"description", c.Args().Get(0)})
 	printActions(actions)
 	return nil
 }
 
 func getAllActions(c *cli.Context) error {
 	var token = getToken()
-	actions := getActionsRequest(token, QueryParam{})
+	actions := getActionsByParam(token, QueryParam{})
 	printActions(actions)
 	return nil
 }
@@ -151,19 +139,22 @@ func updateAction(c *cli.Context) error {
 			Id:          &id,
 			Description: description,
 			Result:      result,
+			Timestamp:   time.Now().Format("2006-01-02T15:04:05.999"),
 		}
-		createActionRequest(action, token)
+		var saved = createActionRequest(action, token)
+		printAction(saved)
 	} else {
-		var actions = getActionsRequest(token, QueryParam{name: "id", value: id})
-		if len(actions) > 0 {
-			var action = actions[0]
+		var action = getSingleActionByParam(token, QueryParam{name: "id", value: id})
+		if (action != Action{}) {
 			if len(description) > 0 {
 				action.Description = description
 			} else {
 				action.Result = result
 			}
+			var saved = createActionRequest(action, token)
+			printAction(saved)
 		} else {
-			fmt.Println("Action has not been found by id %s", id)
+			fmt.Printf("Action has not been found by id %s\n", id)
 		}
 	}
 	return nil
@@ -223,7 +214,21 @@ func loginRequest(authRequest AuthRequest) string {
 	return ar.Token
 }
 
-func getActionsRequest(token string, param QueryParam) []Action {
+func getActionsByParam(token string, param QueryParam) []Action {
+	data := getActionsRequest(token, param)
+	var actions []Action
+	json.Unmarshal([]byte(data), &actions)
+	return actions
+}
+
+func getSingleActionByParam(token string, param QueryParam) Action {
+	data := getActionsRequest(token, param)
+	var action Action
+	json.Unmarshal([]byte(data), &action)
+	return action
+}
+
+func getActionsRequest(token string, param QueryParam) []byte {
 	req, _ := http.NewRequest("GET", "http://localhost:8080/api/item", nil)
 	if (param != QueryParam{}) {
 		q := req.URL.Query()
@@ -240,10 +245,7 @@ func getActionsRequest(token string, param QueryParam) []Action {
 		return nil
 	}
 	data, _ := ioutil.ReadAll(response.Body)
-
-	var actions []Action
-	json.Unmarshal([]byte(data), &actions)
-	return actions
+	return data
 }
 
 func createActionRequest(action Action, token string) Action {
@@ -277,6 +279,18 @@ func printActions(actions []Action) {
 	for _, action := range actions {
 		printAction(action)
 	}
+}
+
+func saveToken(token string) {
+	ioutil.WriteFile("token", []byte(token), 0644)
+}
+
+func getToken() string {
+	token, err := ioutil.ReadFile("token")
+	if err != nil || !isAuthorized(string(token)) {
+		fmt.Printf("Unauthorized, you have to log in first!\n")
+	}
+	return string(token)
 }
 
 func marshalBody(body map[string]string) io.Reader {
