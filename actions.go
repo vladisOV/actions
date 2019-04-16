@@ -32,15 +32,28 @@ type QueryParam struct {
 }
 
 type AuthRequest struct {
-	username string
-	password string
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
+
+type ErrorResponse struct {
+	Timestamp string
+	Path      string
+	Status    string
+	Error     string
+	Message   string
+}
+
+var (
+	version = "1.0.0"
+	url     = "http://localhost:8080/"
+)
 
 func main() {
 	app := cli.NewApp()
 	app.Name = "actions"
 	app.Usage = "add/get/edit your actions"
-	app.Version = "1.0.0"
+	app.Version = version
 	app.EnableBashCompletion = true
 
 	app.Commands = []cli.Command{
@@ -82,6 +95,11 @@ func main() {
 					Usage:   "Get actions by result",
 					Action:  getActionsByResult,
 				},
+				{
+					Name:   "date",
+					Usage:  "Get actions by date yyyy-MM-dd",
+					Action: getActionsByDate,
+				},
 			},
 		},
 		{
@@ -95,12 +113,26 @@ func main() {
 			},
 			Action: updateAction,
 		},
+		{
+			Name:    "register",
+			Aliases: []string{"r"},
+			Usage:   "Register new user",
+			Action:  register,
+		},
 	}
 
 	err := app.Run(os.Args)
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+//TODO refactor, generic func
+func getActionsByDate(c *cli.Context) error {
+	var token = getToken()
+	actions := getActionsByParam(token, QueryParam{"date", c.Args().Get(0)})
+	printActions(actions)
+	return nil
 }
 
 func getActionsByResult(c *cli.Context) error {
@@ -182,13 +214,13 @@ func auth(c *cli.Context) error {
 	if err != nil {
 		return nil
 	}
-	authRequest.username = userline
+	authRequest.Username = userline
 	fmt.Println("Enter your password:")
 	passline, err := readline.String("> ")
 	if err != nil {
 		return nil
 	}
-	authRequest.password = passline
+	authRequest.Password = passline
 	token := loginRequest(authRequest)
 	if len(token) == 0 {
 		fmt.Printf("Incorrect username or/and password.\n")
@@ -199,9 +231,49 @@ func auth(c *cli.Context) error {
 	return nil
 }
 
+func register(c *cli.Context) error {
+	var authRequest = AuthRequest{}
+	fmt.Println("Enter username:")
+	userline, err := readline.String("> ")
+	if err != nil {
+		return nil
+	}
+	authRequest.Username = userline
+	fmt.Println("Enter your password:")
+	passline, err := readline.String("> ")
+	if err != nil {
+		return nil
+	}
+	var password = passline
+	fmt.Println("Repeat your password:")
+	passline, err = readline.String("> ")
+	if err != nil {
+		return nil
+	}
+	if password != passline || password == "" {
+		fmt.Printf("Passwords does not match.\n")
+		return nil
+	}
+	authRequest.Password = password
+	response := registerRequest(authRequest)
+	fmt.Printf(response + "\n")
+	return nil
+}
+
+func registerRequest(authRequest AuthRequest) string {
+	response, err := http.Post(url+"register", "application/json", marshalBody(authRequest))
+	if err != nil {
+		return "Smth went wrong. User hasn't been saved."
+	}
+	statusCode := response.StatusCode
+	if statusCode == 200 {
+		return "User has been saved successfully. Use login command to log in."
+	}
+	return "Smth went wrong. User hasn't been saved."
+}
+
 func loginRequest(authRequest AuthRequest) string {
-	jsonData := map[string]string{"username": authRequest.username, "password": authRequest.password}
-	response, err := http.Post("http://localhost:8080/auth", "application/json", marshalBody(jsonData))
+	response, err := http.Post(url+"auth", "application/json", marshalBody(authRequest))
 	if err != nil {
 		fmt.Printf("Failed to authenticate %s\n", err)
 		return ""
@@ -215,21 +287,27 @@ func loginRequest(authRequest AuthRequest) string {
 }
 
 func getActionsByParam(token string, param QueryParam) []Action {
-	data := getActionsRequest(token, param)
+	data, statusCode := getActionsRequest(token, param)
+	if checkBadRequest(data, statusCode) {
+		return nil
+	}
 	var actions []Action
 	json.Unmarshal([]byte(data), &actions)
 	return actions
 }
 
 func getSingleActionByParam(token string, param QueryParam) Action {
-	data := getActionsRequest(token, param)
+	data, statusCode := getActionsRequest(token, param)
+	if checkBadRequest(data, statusCode) {
+		return Action{}
+	}
 	var action Action
 	json.Unmarshal([]byte(data), &action)
 	return action
 }
 
-func getActionsRequest(token string, param QueryParam) []byte {
-	req, _ := http.NewRequest("GET", "http://localhost:8080/api/item", nil)
+func getActionsRequest(token string, param QueryParam) ([]byte, int) {
+	req, _ := http.NewRequest("GET", url+"api/item", nil)
 	if (param != QueryParam{}) {
 		q := req.URL.Query()
 		q.Add(param.name, param.value)
@@ -242,16 +320,17 @@ func getActionsRequest(token string, param QueryParam) []byte {
 
 	if err != nil {
 		fmt.Printf("Request to actions storage failed with error %s\n", err)
-		return nil
+		return nil, 500
 	}
+
 	data, _ := ioutil.ReadAll(response.Body)
-	return data
+	return data, response.StatusCode
 }
 
 func createActionRequest(action Action, token string) Action {
 	jsonValue, _ := json.Marshal(action)
 
-	req, err := http.NewRequest("POST", "http://localhost:8080/api/item", bytes.NewBuffer(jsonValue))
+	req, err := http.NewRequest("POST", url+"api/item", bytes.NewBuffer(jsonValue))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
@@ -293,8 +372,18 @@ func getToken() string {
 	return string(token)
 }
 
-func marshalBody(body map[string]string) io.Reader {
-	jsonValue, _ := json.Marshal(body)
+func checkBadRequest(data []byte, statusCode int) bool {
+	if statusCode == 400 {
+		var error ErrorResponse
+		json.Unmarshal([]byte(data), &error)
+		fmt.Printf("Request to actions storage failed with error '%s'\n", error.Message)
+		return true
+	}
+	return false
+}
+
+func marshalBody(v interface{}) io.Reader {
+	jsonValue, _ := json.Marshal(v)
 	return bytes.NewBuffer(jsonValue)
 }
 
